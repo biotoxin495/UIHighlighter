@@ -1,0 +1,1 @@
+{"name":"UIHighlighter","className":"DataModel","filePaths":["default.project.json"],"children":[{"name":"ReplicatedStorage","className":"ReplicatedStorage","children":[{"name":"UIHighlighter","className":"ModuleScript","filePaths":["src/init.luau"]}]}]}

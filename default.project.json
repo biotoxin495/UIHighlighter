@@ -1,0 +1,12 @@
+{
+  "name": "TooltipManager",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "TooltipManager": {
+        "$path": "src"
+      }
+    }
+  }
+}

@@ -269,6 +269,8 @@ local UIHighlighter = require(ReplicatedStorage.UIHighlighter)
 
 ## License
 
-This project is available under the license included in the repository.
+This project is released under the MIT License.
+
+See `LICENSE` for details.
 
 made with ❤️ by biotoxin495

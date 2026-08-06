@@ -16,7 +16,7 @@
 -- 	local UIHighlighter = require(ReplicatedStorage.UIHighlighter)
 
 -- 	local highlight = UIHighlighter.Highlight(button, {
--- 		ArrowSize = 48,
+-- 		ArrowSize = 0.6,
 -- 		Padding = 12,
 -- 		Animation = {
 -- 			ColorA = Color3.fromRGB(255, 83, 83),
@@ -45,6 +45,7 @@ export type HighlightConfig = {
 	ScaleMultiplier: number?,
 	Padding: number?,
 	ZIndex: number?,
+	FadeDuration: number?,
 	Animation: AnimationConfig?,
 }
 
@@ -74,6 +75,7 @@ type ResolvedHighlightConfig = {
 	ScaleMultiplier: number,
 	Padding: number,
 	ZIndex: number,
+	FadeDuration: number,
 	Animation: ResolvedAnimationConfig,
 }
 
@@ -81,18 +83,23 @@ type InternalHighlight = Highlight & {
 	_config: ResolvedHighlightConfig,
 	_destroyed: boolean,
 	_baseRotations: { [string]: number },
+	_visibilityAlpha: number,
+	_lastUpdateTime: number,
+	_animationStartTime: number,
+	_wasShown: boolean,
 }
 
 local DEFAULT_CONFIG: ResolvedHighlightConfig = {
 	ArrowImageId = "rbxassetid://119492233291268",
-	ArrowSize = 64,
+	ArrowSize = 0.75,
 	ScaleMultiplier = 1.25,
 	Padding = 0,
 	ZIndex = 100,
+	FadeDuration = 0.1,
 	Animation = {
 		Enabled = true,
 		PulseSpeed = 3,
-		PulseDistance = 25,
+		PulseDistance = 0.3,
 		RotationWiggle = 5,
 		ColorA = Color3.fromRGB(255, 83, 83),
 		ColorB = Color3.fromRGB(255, 215, 0),
@@ -146,6 +153,9 @@ local function resolveConfig(config: HighlightConfig?): ResolvedHighlightConfig
 			else DEFAULT_CONFIG.ScaleMultiplier,
 		Padding = if config and config.Padding ~= nil then math.max(config.Padding, 0) else DEFAULT_CONFIG.Padding,
 		ZIndex = if config and config.ZIndex ~= nil then config.ZIndex else DEFAULT_CONFIG.ZIndex,
+		FadeDuration = if config and config.FadeDuration ~= nil
+			then math.max(config.FadeDuration, 0)
+			else DEFAULT_CONFIG.FadeDuration,
 		Animation = {
 			Enabled = if animation and animation.Enabled ~= nil
 				then animation.Enabled
@@ -273,29 +283,69 @@ local function updateHighlight(highlight: InternalHighlight, currentTime: number
 	end
 
 	local absoluteSize = target.AbsoluteSize
-	local shouldShow = highlight.Enabled and isActuallyVisible(target) and absoluteSize.X > 0 and absoluteSize.Y > 0
+	local highlightWidth = absoluteSize.X * config.ScaleMultiplier + config.Padding * 2
+	local highlightHeight = absoluteSize.Y * config.ScaleMultiplier + config.Padding * 2
+	local shouldShow = highlight.Enabled
+		and isActuallyVisible(target)
+		and absoluteSize.X > 0
+		and absoluteSize.Y > 0
+		and highlightWidth > 0
+		and highlightHeight > 0
 
-	container.Visible = shouldShow
+	local justBecameVisible = shouldShow and not highlight._wasShown
+	if justBecameVisible then
+		highlight._animationStartTime = currentTime
+		highlight._visibilityAlpha = 0
+	end
+	highlight._wasShown = shouldShow
+
+	local deltaTime = math.max(currentTime - highlight._lastUpdateTime, 0)
+	highlight._lastUpdateTime = currentTime
+
+	local targetAlpha = if shouldShow then 1 else 0
+	local alphaStep = 0
+	if not justBecameVisible then
+		alphaStep = if config.FadeDuration > 0 then deltaTime / config.FadeDuration else 1
+	end
+
+	if highlight._visibilityAlpha < targetAlpha then
+		highlight._visibilityAlpha = math.min(highlight._visibilityAlpha + alphaStep, targetAlpha)
+	elseif highlight._visibilityAlpha > targetAlpha then
+		highlight._visibilityAlpha = math.max(highlight._visibilityAlpha - alphaStep, targetAlpha)
+	end
+
+	if shouldShow then
+		container.Visible = true
+	end
+
+	for _, arrow in pairs(highlight.Arrows) do
+		arrow.ImageTransparency = 1 - highlight._visibilityAlpha
+	end
+
 	if not shouldShow then
+		if highlight._visibilityAlpha <= 0 then
+			container.Visible = false
+		end
 		return
 	end
 
 	local absolutePosition = target.AbsolutePosition
 	local screenOffset = getTargetScreenOffset(target)
 	local center = absolutePosition + (absoluteSize / 2) + screenOffset
+	local shortestSide = math.min(highlightWidth, highlightHeight)
+	local arrowSide = shortestSide * config.ArrowSize
+	local arrowScale = Vector2.new(arrowSide / highlightWidth, arrowSide / highlightHeight)
 
 	container.Position = UDim2.fromOffset(center.X, center.Y)
-	container.Size = UDim2.fromOffset(
-		absoluteSize.X * config.ScaleMultiplier + config.Padding * 2,
-		absoluteSize.Y * config.ScaleMultiplier + config.Padding * 2
-	)
+	container.Size = UDim2.fromOffset(highlightWidth, highlightHeight)
 
 	local alpha = 0
 	local rotationOffset = 0
 	local currentColor = animation.ColorA
 
 	if animation.Enabled then
-		local wave = math.sin(currentTime * animation.PulseSpeed)
+		local animationTime = currentTime - highlight._animationStartTime
+		local wave = math.cos(animationTime * animation.PulseSpeed)
 		alpha = (wave + 1) / 2
 		rotationOffset = wave * animation.RotationWiggle
 		currentColor = animation.ColorA:Lerp(animation.ColorB, alpha)
@@ -303,10 +353,15 @@ local function updateHighlight(highlight: InternalHighlight, currentTime: number
 
 	for cornerName, arrow in pairs(highlight.Arrows) do
 		local arrowConfig = ARROW_CONFIG[cornerName]
-		local pulseOffset = arrowConfig.PulseDirection * (alpha * animation.PulseDistance)
+		local pulseDistance = shortestSide * alpha * animation.PulseDistance
+		local pulseOffset = Vector2.new(
+			arrowConfig.PulseDirection.X * pulseDistance / highlightWidth,
+			arrowConfig.PulseDirection.Y * pulseDistance / highlightHeight
+		)
 
 		arrow.Position =
-			UDim2.new(arrowConfig.Position.X.Scale, pulseOffset.X, arrowConfig.Position.Y.Scale, pulseOffset.Y)
+			UDim2.fromScale(arrowConfig.Position.X.Scale + pulseOffset.X, arrowConfig.Position.Y.Scale + pulseOffset.Y)
+		arrow.Size = UDim2.fromScale(arrowScale.X, arrowScale.Y)
 		arrow.Rotation = highlight._baseRotations[cornerName] + rotationOffset
 		arrow.ImageColor3 = currentColor
 	end
@@ -347,9 +402,10 @@ local function createHighlight(target: GuiObject, config: ResolvedHighlightConfi
 		arrow.AnchorPoint = Vector2.new(0.5, 0.5)
 		arrow.Image = config.ArrowImageId
 		arrow.ImageColor3 = config.Animation.ColorA
+		arrow.ImageTransparency = 1
 		arrow.Position = arrowConfig.Position
 		arrow.Rotation = arrowConfig.Rotation
-		arrow.Size = UDim2.fromOffset(config.ArrowSize, config.ArrowSize)
+		arrow.Size = UDim2.fromScale(config.ArrowSize, config.ArrowSize)
 		arrow.ZIndex = config.ZIndex + 1
 		arrow.Parent = container
 
@@ -365,6 +421,10 @@ local function createHighlight(target: GuiObject, config: ResolvedHighlightConfi
 		_config = config,
 		_destroyed = false,
 		_baseRotations = baseRotations,
+		_visibilityAlpha = 0,
+		_lastUpdateTime = os.clock(),
+		_animationStartTime = os.clock(),
+		_wasShown = false,
 	}, HighlightMethods) :: any
 
 	return highlight
@@ -379,8 +439,16 @@ function HighlightMethods:SetEnabled(enabled: boolean)
 		return
 	end
 
+	if enabled and not self.Enabled then
+		self._wasShown = false
+		self._visibilityAlpha = 0
+
+		for _, arrow in pairs(self.Arrows) do
+			arrow.ImageTransparency = 1
+		end
+	end
+
 	self.Enabled = enabled
-	self.Container.Visible = enabled
 end
 
 function HighlightMethods:IsDestroyed(): boolean

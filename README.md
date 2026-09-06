@@ -267,8 +267,4 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UIHighlighter = require(ReplicatedStorage.UIHighlighter)
 ```
 
-## License
-
-This project is available under the license included in the repository.
-
 made with ❤️ by biotoxin495
